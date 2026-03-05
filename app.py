@@ -91,7 +91,7 @@ tab1, tab2 = st.tabs(["➕ 新增單字", "🌙 夜晚複習"])
 with tab1:
     st.markdown("### 快速紀錄")
     with st.form(key="add_word_form", clear_on_submit=True):
-        new_word = st.text_input("輸入不熟的英文單字：").strip().lower()
+        new_word = st.text_input("輸入不熟的英文單字：", autocomplete="off").strip().lower()
         submit_button = st.form_submit_button(label="新增並自動查字典")
         
     if submit_button and new_word:
@@ -133,3 +133,4 @@ with tab2:
                     audio_fp = play_audio(row["單字"])
                     st.audio(audio_fp, format="audio/mp3", autoplay=True)
             st.divider()
+
