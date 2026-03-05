@@ -482,23 +482,14 @@ with tab4:
     
     if "已記住" not in df.columns:
         df["已記住"] = ""
-    # 確保所有欄位為字串，避免 data_editor 類型相容性錯誤（NaN/float 混用）
-    editor_df = df.copy()
-    for col in editor_df.columns:
-        editor_df[col] = editor_df[col].fillna("").astype(str).replace("nan", "")
+    # ★ 預防當機：把所有空值變成空字串，強制全體轉為文字格式 ★
+    safe_df = df.fillna("").astype(str)
     edited_df = st.data_editor(
-        editor_df,
+        safe_df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
         key=f"vocab_editor_{st.session_state.editor_version}",
-        column_config={
-            "日期": st.column_config.TextColumn("日期", width="small"),
-            "單字": st.column_config.TextColumn("單字", width="small"),
-            "詞性": st.column_config.TextColumn("詞性", width="small"),
-            "中文解釋": st.column_config.TextColumn("中文解釋", width="large"),
-            "已記住": st.column_config.TextColumn("已記住", width="small", help="輸入 ✓ 表示已記住"),
-        }
     )
     
     col_save, col_del, _ = st.columns([1, 1, 2])
