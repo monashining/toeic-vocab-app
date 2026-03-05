@@ -102,7 +102,7 @@ except Exception as e:
     st.error(f"⚠️ 無法連線 GitHub：{e}")
     st.stop()
 
-DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "已記住"]
+DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "音標", "已記住"]
 
 def get_vocab_data():
     try:
@@ -111,6 +111,8 @@ def get_vocab_data():
         df = pd.read_csv(io.StringIO(decoded_content))
         if "已記住" not in df.columns:
             df["已記住"] = ""
+        if "音標" not in df.columns:
+            df["音標"] = ""
         return df, file_content.sha
     except Exception:
         return pd.DataFrame(columns=DEFAULT_COLUMNS), None
@@ -166,7 +168,7 @@ file_sha = st.session_state.file_sha
 # 3. 雙重翻譯與後端語音引擎 (解決 iOS 沒聲音)
 # ==========================================
 def get_dict_info(word):
-    """爬取 Yahoo 字典的詞性與中文解釋（排除音標 IPA）"""
+    """爬取 Yahoo 字典：詞性、中文解釋、KK/IPA 音標（分開擷取）"""
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Referer': 'https://tw.dictionary.yahoo.com/'
@@ -176,21 +178,28 @@ def get_dict_info(word):
         pos_element = soup.find('div', class_='pos_button')
         pos = pos_element.text.strip() if pos_element else "未知"
         meaning = ""
+        phonetic = ""
         meaning_element = soup.find('div', class_='dictionaryWordCard')
         if meaning_element:
             comp_list = meaning_element.find('div', class_='compList')
             if comp_list:
                 for item in comp_list.find_all(['li', 'div']) or [comp_list]:
                     text = item.get_text(separator=' ', strip=True)
-                    if re.match(r'^\[.*\]\s*$', text) or (text.startswith('IPA') and len(text) < 40):
+                    # 擷取音標：IPA[...] 或 KK[...] 格式
+                    if re.search(r'(IPA|KK)?\s*\[[^\]]+\]', text, re.I) or (text.startswith('IPA') or text.startswith('KK')):
+                        if not phonetic:
+                            phonetic = text
                         continue
+                    # 擷取中文解釋
                     if re.search(r'[\u4e00-\u9fff]', text) and len(text) > 2:
                         meaning = text
                         break
                 if not meaning:
                     raw = comp_list.get_text(separator=' ', strip=True)
-                    meaning = re.sub(r'\[[^\]]*\]\s*', '', raw).strip()
-        return pos, meaning
+                    meaning = re.sub(r'(IPA|KK)?\s*\[[^\]]*\]\s*', '', raw).strip()
+                    if not re.search(r'[\u4e00-\u9fff]', meaning):
+                        meaning = ""
+        return pos, meaning, phonetic
     
     # 方法 1：search.yahoo.com（新版）
     try:
@@ -199,13 +208,13 @@ def get_dict_info(word):
             headers=headers, timeout=5
         )
         soup = BeautifulSoup(res.text, 'html.parser')
-        pos, meaning = extract_from_soup(soup)
+        pos, meaning, phonetic = extract_from_soup(soup)
         if meaning and re.search(r'[\u4e00-\u9fff]', meaning):
-            return pos, meaning
+            return pos, meaning, phonetic
     except Exception:
         pass
     
-    # 方法 2：dictionary.yahoo.com（舊版，結構較單純）
+    # 方法 2：dictionary.yahoo.com（舊版）
     try:
         res = requests.get(
             f"https://tw.dictionary.yahoo.com/dictionary?p={quote_plus(word)}",
@@ -217,16 +226,16 @@ def get_dict_info(word):
             parts = [li.get_text(strip=True) for li in ul.find_all('li', class_='exp-item')]
             meaning = '；'.join(p for p in parts if re.search(r'[\u4e00-\u9fff]', p))
             if meaning:
-                return "未知", meaning
+                return "未知", meaning, ""
     except Exception:
         pass
     
-    # 方法 3：deep_translator 備援
+    # 方法 3：deep_translator 備援（無音標）
     try:
         translated = GoogleTranslator(source='en', target='zh-TW').translate(word)
-        return "未知", translated
+        return "未知", translated, ""
     except Exception:
-        return "未知", "請至管理區手動輸入"
+        return "未知", "請至管理區手動輸入", ""
 
 def get_audio_url(word):
     """取得發音 URL（有道字典，iOS Safari 相容性較佳）"""
@@ -296,13 +305,16 @@ with tab1:
         if new_word in df['單字'].values:
             st.warning(f"「**{new_word}**」已經在你的單字庫裡囉！")
         else:
-            with st.spinner("正在抓取中文解釋..."):
-                pos, meaning = get_dict_info(new_word)
+            with st.spinner("正在抓取中文解釋與音標..."):
+                pos, meaning, phonetic = get_dict_info(new_word)
                 today = datetime.now().strftime("%Y-%m-%d")
-                if "已記住" not in df.columns:
-                    df["已記住"] = ""
-                new_row = pd.DataFrame([[today, new_word, pos, meaning, ""]], columns=df.columns)
-                new_df = pd.concat([df, new_row], ignore_index=True)
+                df_add = df.copy()
+                for c in DEFAULT_COLUMNS:
+                    if c not in df_add.columns:
+                        df_add[c] = ""
+                df_add = df_add[DEFAULT_COLUMNS]
+                new_row = pd.DataFrame([[today, new_word, pos, meaning, phonetic, ""]], columns=DEFAULT_COLUMNS)
+                new_df = pd.concat([df_add, new_row], ignore_index=True)
                 
                 # ★ 存檔並同步更新記憶體 ★
                 new_sha = save_vocab_data(new_df, file_sha)
@@ -338,6 +350,8 @@ with tab2:
         if search:
             mask = df_review["單字"].str.contains(search, case=False, na=False) | \
                    df_review["中文解釋"].str.contains(search, case=False, na=False)
+            if "音標" in df_review.columns:
+                mask = mask | df_review["音標"].fillna("").astype(str).str.contains(search, case=False, na=False)
             df_review = df_review[mask]
         if sort_order == "最新優先":
             df_review = df_review.iloc[::-1].reset_index(drop=True)
@@ -353,7 +367,9 @@ with tab2:
                     col_word, col_mark, col_audio = st.columns([3, 1, 1])
                     with col_word:
                         st.subheader(row["單字"])
-                        st.markdown(f"**{row.get('詞性', '')}** {row.get('中文解釋', '')}")
+                        phonetic_str = str(row.get("音標", "")).strip()
+                        meaning_str = str(row.get("中文解釋", "")).strip()
+                        st.markdown(f"**{row.get('詞性', '')}** {meaning_str}" + (f"  _{phonetic_str}_" if phonetic_str else ""))
                         st.caption(f"加入日期：{row.get('日期', '')}" + (" ✓ 已記住" if row_mastered else ""))
                     with col_mark:
                         if row_mastered:
@@ -379,14 +395,9 @@ with tab3:
             st.session_state.quiz_pool = []
         if 'quiz_flipped' not in st.session_state:
             st.session_state.quiz_flipped = False
-        if 'quiz_mode' not in st.session_state:
-            st.session_state.quiz_mode = "en_to_zh"  # 看英文猜中文
         
-        # 設定區
+        # 設定區（僅支援：看英文 → 猜中文）
         with st.expander("⚙️ 考試設定", expanded=len(st.session_state.quiz_pool) == 0):
-            mode = st.radio("出題方向", ["看英文 → 猜中文", "看中文 → 猜英文"], horizontal=True)
-            st.session_state.quiz_mode = "en_to_zh" if "英文" in mode else "zh_to_en"
-            
             quiz_df = df.copy()
             if "已記住" in quiz_df.columns:
                 quiz_scope = st.radio("出題範圍", ["全部單字", "僅未記住"], horizontal=True)
@@ -418,13 +429,12 @@ with tab3:
             # 進度
             st.progress((idx + 1) / total, text=f"第 {idx + 1} / {total} 題")
             
-            # 題目卡片（長文字截斷顯示）
-            def truncate(s, max_len=80):
-                s = str(s).strip()
-                return s[:max_len] + "…" if len(s) > max_len else s
-            question = current["單字"] if st.session_state.quiz_mode == "en_to_zh" else truncate(current["中文解釋"])
-            answer = current["中文解釋"] if st.session_state.quiz_mode == "en_to_zh" else current["單字"]
-            hint = f"({current['詞性']})" if st.session_state.quiz_mode == "en_to_zh" else ""
+            # 題目：英文單字 + 詞性
+            question = current["單字"]
+            ans_meaning = str(current.get("中文解釋", "")).strip()
+            ans_phonetic = str(current.get("音標", "")).strip()
+            answer = f"{ans_meaning}" + (f"  _{ans_phonetic}_" if ans_phonetic else "")
+            hint = f"({current['詞性']})"
             
             st.markdown("### 題目")
             st.markdown(f"""
@@ -439,9 +449,8 @@ with tab3:
             </div>
             """, unsafe_allow_html=True)
             
-            # 發音（僅英文題目時顯示）
-            if st.session_state.quiz_mode == "en_to_zh":
-                render_audio_player(current["單字"], key_suffix="_q")
+            # 發音
+            render_audio_player(current["單字"], key_suffix="_q")
             
             # 翻面 / 顯示答案
             if not st.session_state.quiz_flipped:
@@ -450,9 +459,7 @@ with tab3:
                     st.rerun()
             else:
                 st.markdown("### 答案")
-                st.success(f"**{answer}**")
-                if st.session_state.quiz_mode == "zh_to_en":
-                    render_audio_player(current["單字"], key_suffix="_a")
+                st.success(answer)
                 
                 col_prev, col_next, _ = st.columns([1, 1, 2])
                 with col_prev:
