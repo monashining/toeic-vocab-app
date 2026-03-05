@@ -203,7 +203,7 @@ def get_dict_info(word):
     except Exception:
         pass
     
-    # --- 引擎 2：Yahoo 字典抓取中文解釋 ---
+    # --- 引擎 2：Yahoo 字典抓取中文解釋 + 音標備援 ---
     EXCLUDE = ("牛津中文字典", "PyDict", "美式", "英式", "網頁搜尋", "查詢詞", "字典", "更多解釋")
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://tw.dictionary.yahoo.com/'}
@@ -213,6 +213,11 @@ def get_dict_info(word):
         )
         res.encoding = res.apparent_encoding or 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
+        # 音標備援：Free Dictionary 無音標時，從 Yahoo 擷取
+        if not phonetic:
+            phonetic_match = re.search(r'(?:IPA|KK)\s*\[([^\]]+)\]', res.text)
+            if phonetic_match:
+                phonetic = phonetic_match.group(0).strip()
         card = soup.find('div', class_='dictionaryWordCard')
         if card:
             candidates = []
