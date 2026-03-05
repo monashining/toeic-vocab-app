@@ -259,6 +259,9 @@ def get_dict_info(word):
         except Exception:
             meaning = "請至管理區手動輸入"
     
+    # 移除中文解釋開頭的詞性（如 "n. 陽臺" → "陽臺"）
+    meaning = re.sub(r'^(vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
+    
     return pos, meaning, phonetic
 
 def get_audio_url(word):
