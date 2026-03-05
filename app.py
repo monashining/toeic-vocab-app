@@ -13,22 +13,18 @@ from deep_translator import GoogleTranslator
 # ==========================================
 st.set_page_config(page_title="專屬 TOEIC 單字庫", page_icon="📖", layout="centered")
 
-# --- 手機版專屬 CSS 樣式優化 ---
 st.markdown("""
 <style>
-/* 減少手機版左右兩側的空白邊距，最大化閱讀範圍 */
 .block-container {
     padding-top: 1.5rem;
     padding-bottom: 2rem;
     padding-left: 1rem;
     padding-right: 1rem;
 }
-/* 讓音檔播放器自動填滿寬度，在手機上更好點擊 */
 audio {
     width: 100%;
     height: 40px;
 }
-/* 微調 Tabs 的字體大小，更適合手機觸控 */
 button[data-baseweb="tab"] {
     font-size: 16px !important;
 }
@@ -36,7 +32,7 @@ button[data-baseweb="tab"] {
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 資料庫連線 (GitHub)
+# 2. 資料庫連線與記憶體管理 (解決同步延遲)
 # ==========================================
 GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
 REPO_NAME = st.secrets["REPO_NAME"]
@@ -45,8 +41,7 @@ FILE_PATH = "vocab.csv"
 @st.cache_resource
 def init_github():
     g = Github(GITHUB_TOKEN)
-    repo = g.get_repo(REPO_NAME)
-    return repo
+    return g.get_repo(REPO_NAME)
 
 repo = init_github()
 
@@ -57,18 +52,29 @@ def get_vocab_data():
         df = pd.read_csv(io.StringIO(decoded_content))
         return df, file_content.sha
     except Exception:
-        df = pd.DataFrame(columns=["日期", "單字", "詞性", "中文解釋"])
-        return df, None
+        return pd.DataFrame(columns=["日期", "單字", "詞性", "中文解釋"]), None
 
 def save_vocab_data(df, sha):
     csv_content = df.to_csv(index=False)
     if sha:
-        repo.update_file(FILE_PATH, "Update vocab list", csv_content, sha)
+        res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, sha)
+        return res['content'].sha
     else:
-        repo.create_file(FILE_PATH, "Create vocab list", csv_content)
+        res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
+        return res['content'].sha
+
+# ★ 核心修正：為 App 加入記憶體，避免 GitHub 快取延遲 ★
+if 'vocab_df' not in st.session_state:
+    df, sha = get_vocab_data()
+    st.session_state.vocab_df = df
+    st.session_state.file_sha = sha
+
+# 從記憶體讀取最新狀態
+df = st.session_state.vocab_df
+file_sha = st.session_state.file_sha
 
 # ==========================================
-# 3. 雙重翻譯引擎
+# 3. 雙重翻譯與後端語音引擎 (解決 iOS 沒聲音)
 # ==========================================
 def get_dict_info(word):
     url = f"https://tw.dictionary.search.yahoo.com/search?p={word}"
@@ -97,12 +103,23 @@ def get_dict_info(word):
         except Exception:
             return "未知", "請至管理區手動輸入"
 
+@st.cache_data(show_spinner=False)
+def get_audio_bytes(word):
+    """★ 核心修正：由後端偷偷下載音檔，直接餵給手機，避開 Apple 阻擋 ★"""
+    url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={word}&tl=en&client=tw-ob"
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        res = requests.get(url, headers=headers, timeout=5)
+        if res.status_code == 200:
+            return res.content
+    except:
+        pass
+    return None
+
 # ==========================================
-# 4. Streamlit 介面設計 (三大分頁)
+# 4. Streamlit 介面設計
 # ==========================================
 st.title("📖 TOEIC 專屬記憶庫")
-
-df, file_sha = get_vocab_data()
 
 tab1, tab2, tab3 = st.tabs(["➕ 新增", "🌙 複習", "✏️ 管理"])
 
@@ -121,29 +138,35 @@ with tab1:
                 today = datetime.now().strftime("%Y-%m-%d")
                 
                 new_row = pd.DataFrame([[today, new_word, pos, meaning]], columns=df.columns)
-                df = pd.concat([df, new_row], ignore_index=True)
+                new_df = pd.concat([df, new_row], ignore_index=True)
                 
-                save_vocab_data(df, file_sha)
+                # ★ 存檔並同步更新記憶體 ★
+                new_sha = save_vocab_data(new_df, file_sha)
+                st.session_state.vocab_df = new_df
+                st.session_state.file_sha = new_sha
+                
                 st.success(f"✅ 已加入：**{new_word}**")
                 st.rerun()
 
-# --- 分頁 2：夜晚複習 (iPhone 卡片式優化排版) ---
+# --- 分頁 2：夜晚複習 ---
 with tab2:
     if df.empty:
         st.info("目前還沒有單字喔！")
     else:
         df_reversed = df.iloc[::-1].reset_index(drop=True)
-        
         for index, row in df_reversed.iterrows():
-            # 使用 container(border=True) 打造像 iOS 原生的卡片視覺效果
             with st.container(border=True):
                 st.subheader(row["單字"])
                 st.markdown(f"**{row.get('詞性', '')}** {row.get('中文解釋', '')}")
                 
-                audio_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={row['單字']}&tl=en&client=tw-ob"
-                st.audio(audio_url, format="audio/mp3")
+                # ★ 使用下載好的實體音檔播放 ★
+                audio_data = get_audio_bytes(row["單字"])
+                if audio_data:
+                    st.audio(audio_data, format="audio/mp3")
+                else:
+                    st.caption("無法取得語音")
 
-# --- 分頁 3：管理與修改 (表格手機版優化) ---
+# --- 分頁 3：管理與修改 ---
 with tab3:
     st.info("💡 直接點擊表格修改，或勾選左側框框按刪除。")
     
@@ -151,12 +174,15 @@ with tab3:
         df, 
         num_rows="dynamic",
         use_container_width=True,
-        hide_index=True, # 隱藏多餘的數字序號，為手機螢幕省空間
+        hide_index=True,
         key="vocab_editor"
     )
     
     if st.button("💾 儲存修改", use_container_width=True):
         with st.spinner("同步中..."):
-            save_vocab_data(edited_df, file_sha)
+            # ★ 存檔並同步更新記憶體 ★
+            new_sha = save_vocab_data(edited_df, file_sha)
+            st.session_state.vocab_df = edited_df
+            st.session_state.file_sha = new_sha
             st.success("✅ 修改已成功儲存！")
             st.rerun()
