@@ -204,24 +204,55 @@ def get_dict_info(word):
         pass
     
     # --- 引擎 2：Yahoo 字典抓取中文解釋 ---
+    EXCLUDE = ("牛津中文字典", "PyDict", "美式", "英式", "網頁搜尋", "查詢詞", "字典", "更多解釋")
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://tw.dictionary.yahoo.com/'}
         res = requests.get(
             f"https://tw.dictionary.search.yahoo.com/search?p={quote_plus(clean_word)}",
             headers=headers, timeout=5
         )
+        res.encoding = res.apparent_encoding or 'utf-8'
         soup = BeautifulSoup(res.text, 'html.parser')
         card = soup.find('div', class_='dictionaryWordCard')
         if card:
+            candidates = []
             for item in card.find_all(['li', 'div', 'span']):
                 text = item.get_text(separator=' ', strip=True)
-                if re.search(r'[\u4e00-\u9fff]', text) and len(text) > 1 and "美式" not in text and "英式" not in text:
-                    meaning = text
+                if not re.search(r'[\u4e00-\u9fff]', text) or len(text) < 2:
+                    continue
+                if any(x in text for x in EXCLUDE) or text in EXCLUDE:
+                    continue
+                # 跳過純音標、純詞性
+                if re.match(r'^(IPA|KK)?\s*\[.*\]\s*$', text) or text in ('vt.', 'vi.', 'n.', 'adj.', 'adv.'):
+                    continue
+                candidates.append(text)
+            # 優先選含「；」或「,」的（典型解釋格式如「改正; 修復」）
+            for c in candidates:
+                if ';' in c or '；' in c or '，' in c or ',' in c:
+                    meaning = c
                     break
+            if not meaning and candidates:
+                meaning = candidates[0]
     except Exception:
         pass
     
-    # 備援：Google 翻譯
+    # 備援 2：舊版 Yahoo 字典
+    if not meaning:
+        try:
+            res = requests.get(
+                f"https://tw.dictionary.yahoo.com/dictionary?p={quote_plus(clean_word)}",
+                headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://tw.dictionary.yahoo.com/'},
+                timeout=5
+            )
+            soup = BeautifulSoup(res.text, 'html.parser')
+            ul = soup.find('ul', class_='explanations')
+            if ul:
+                parts = [li.get_text(strip=True) for li in ul.find_all('li', class_='exp-item')]
+                meaning = '；'.join(p for p in parts if re.search(r'[\u4e00-\u9fff]', p) and p not in EXCLUDE)
+        except Exception:
+            pass
+    
+    # 備援 3：Google 翻譯
     if not meaning:
         try:
             meaning = GoogleTranslator(source='en', target='zh-TW').translate(clean_word)
