@@ -3,5 +3,4 @@ pandas
 requests
 beautifulsoup4
 gtts
-gspread
-oauth2client
+PyGithub
