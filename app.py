@@ -168,74 +168,67 @@ file_sha = st.session_state.file_sha
 # 3. 雙重翻譯與後端語音引擎 (解決 iOS 沒聲音)
 # ==========================================
 def get_dict_info(word):
-    """爬取 Yahoo 字典：詞性、中文解釋、KK/IPA 音標（分開擷取）"""
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://tw.dictionary.yahoo.com/'
-    }
+    """
+    雙引擎架構：
+    1. 詞性與音標：Free Dictionary API（穩定、不阻擋）
+    2. 中文解釋：Yahoo 字典優先，被擋則 Google 翻譯
+    """
+    pos = "未知"
+    meaning = ""
+    phonetic = ""
+    clean_word = str(word).strip().lower()
     
-    def extract_from_soup(soup):
-        pos_element = soup.find('div', class_='pos_button')
-        pos = pos_element.text.strip() if pos_element else "未知"
-        meaning = ""
-        phonetic = ""
-        meaning_element = soup.find('div', class_='dictionaryWordCard')
-        if meaning_element:
-            comp_list = meaning_element.find('div', class_='compList')
-            if comp_list:
-                for item in comp_list.find_all(['li', 'div']) or [comp_list]:
-                    text = item.get_text(separator=' ', strip=True)
-                    # 擷取音標：IPA[...] 或 KK[...] 格式
-                    if re.search(r'(IPA|KK)?\s*\[[^\]]+\]', text, re.I) or (text.startswith('IPA') or text.startswith('KK')):
-                        if not phonetic:
-                            phonetic = text
-                        continue
-                    # 擷取中文解釋
-                    if re.search(r'[\u4e00-\u9fff]', text) and len(text) > 2:
-                        meaning = text
+    # --- 引擎 1：Free Dictionary API 抓取音標與詞性 ---
+    try:
+        api_url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{quote_plus(clean_word)}"
+        api_res = requests.get(api_url, timeout=5)
+        if api_res.status_code == 200:
+            data = api_res.json()[0]
+            if data.get("phonetic"):
+                phonetic = data["phonetic"]
+            else:
+                for p in data.get("phonetics", []):
+                    if p.get("text"):
+                        phonetic = p["text"]
                         break
-                if not meaning:
-                    raw = comp_list.get_text(separator=' ', strip=True)
-                    meaning = re.sub(r'(IPA|KK)?\s*\[[^\]]*\]\s*', '', raw).strip()
-                    if not re.search(r'[\u4e00-\u9fff]', meaning):
-                        meaning = ""
-        return pos, meaning, phonetic
-    
-    # 方法 1：search.yahoo.com（新版）
-    try:
-        res = requests.get(
-            f"https://tw.dictionary.search.yahoo.com/search?p={word}",
-            headers=headers, timeout=5
-        )
-        soup = BeautifulSoup(res.text, 'html.parser')
-        pos, meaning, phonetic = extract_from_soup(soup)
-        if meaning and re.search(r'[\u4e00-\u9fff]', meaning):
-            return pos, meaning, phonetic
+            if data.get("meanings") and len(data["meanings"]) > 0:
+                raw_pos = data["meanings"][0].get("partOfSpeech", "")
+                pos_map = {
+                    "noun": "n.", "verb": "v.", "adjective": "adj.",
+                    "adverb": "adv.", "pronoun": "pron.", "preposition": "prep.",
+                    "conjunction": "conj.", "interjection": "int.", "exclamation": "int.",
+                    "transitive verb": "vt.", "intransitive verb": "vi."
+                }
+                pos = pos_map.get(raw_pos.lower(), raw_pos) if raw_pos else "未知"
     except Exception:
         pass
     
-    # 方法 2：dictionary.yahoo.com（舊版）
+    # --- 引擎 2：Yahoo 字典抓取中文解釋 ---
     try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         res = requests.get(
-            f"https://tw.dictionary.yahoo.com/dictionary?p={quote_plus(word)}",
+            f"https://tw.dictionary.search.yahoo.com/search?p={quote_plus(clean_word)}",
             headers=headers, timeout=5
         )
         soup = BeautifulSoup(res.text, 'html.parser')
-        ul = soup.find('ul', class_='explanations')
-        if ul:
-            parts = [li.get_text(strip=True) for li in ul.find_all('li', class_='exp-item')]
-            meaning = '；'.join(p for p in parts if re.search(r'[\u4e00-\u9fff]', p))
-            if meaning:
-                return "未知", meaning, ""
+        card = soup.find('div', class_='dictionaryWordCard')
+        if card:
+            for item in card.find_all(['li', 'div', 'span']):
+                text = item.get_text(separator=' ', strip=True)
+                if re.search(r'[\u4e00-\u9fff]', text) and len(text) > 1 and "美式" not in text and "英式" not in text:
+                    meaning = text
+                    break
     except Exception:
         pass
     
-    # 方法 3：deep_translator 備援（無音標）
-    try:
-        translated = GoogleTranslator(source='en', target='zh-TW').translate(word)
-        return "未知", translated, ""
-    except Exception:
-        return "未知", "請至管理區手動輸入", ""
+    # 備援：Google 翻譯
+    if not meaning:
+        try:
+            meaning = GoogleTranslator(source='en', target='zh-TW').translate(clean_word)
+        except Exception:
+            meaning = "請至管理區手動輸入"
+    
+    return pos, meaning, phonetic
 
 def get_audio_url(word):
     """取得發音 URL（有道字典，iOS Safari 相容性較佳）"""
