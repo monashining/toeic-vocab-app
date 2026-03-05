@@ -218,6 +218,20 @@ def get_dict_info(word):
             phonetic_match = re.search(r'(?:IPA|KK)\s*\[([^\]]+)\]', res.text)
             if phonetic_match:
                 phonetic = phonetic_match.group(0).strip()
+            # Yahoo 也無時，嘗試 Wiktionary 頁面中的 IPA
+            if not phonetic:
+                try:
+                    wk_res = requests.get(
+                        f"https://en.wiktionary.org/wiki/{quote_plus(clean_word)}",
+                        headers={'User-Agent': 'Mozilla/5.0'}, timeout=5
+                    )
+                    # 匹配 /.../ 格式的 IPA
+                    wk_match = re.search(r'/([ˈˌəɪʊʌæɒɔɑɛθðʃʒŋɡː\-\s\.a-zA-Z]{4,})/', wk_res.text)
+                    if wk_match:
+                        p = wk_match.group(1).strip()
+                        phonetic = f"/{p}/" if not p.startswith('/') else p
+                except Exception:
+                    pass
         card = soup.find('div', class_='dictionaryWordCard')
         if card:
             candidates = []
@@ -266,6 +280,8 @@ def get_dict_info(word):
     
     # 移除中文解釋開頭的詞性（如 "n. 陽臺" → "陽臺"）
     meaning = re.sub(r'^(vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
+    # 移除開頭的英文單字（如 "silverware 銀製品" → "銀製品"）
+    meaning = re.sub(r'^([a-zA-Z\-]+\s+)+', '', meaning).strip()
     
     return pos, meaning, phonetic
 
