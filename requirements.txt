@@ -2,5 +2,5 @@ streamlit
 pandas
 requests
 beautifulsoup4
-gtts
 PyGithub
+deep-translator
