@@ -127,28 +127,18 @@ def _toggle_mastered(df, word, mastered):
     st.session_state.vocab_df = df
     st.session_state.file_sha = new_sha
 
-def save_vocab_data(df, sha):
-    """儲存單字到 GitHub，若 SHA 過期會自動重試取得最新版本"""
+def save_vocab_data(df, sha=None):
+    """終極儲存方案：忽略舊 SHA，每次寫入前即時抓取最新 SHA，徹底杜絕衝突"""
     csv_content = df.to_csv(index=False)
     try:
-        if sha:
-            try:
-                res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, sha)
-                return res['content'].sha
-            except GithubException as e:
-                # 422 = SHA 不符（檔案已被修改），重新取得最新 SHA 再試
-                if getattr(e, 'status', 0) in (404, 422):
-                    try:
-                        file_content = repo.get_contents(FILE_PATH)
-                        res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, file_content.sha)
-                        return res['content'].sha
-                    except Exception:
-                        raise
-                raise
-        else:
-            res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
-            return res['content'].sha
+        # 1. 每次存檔前，強制去 GitHub 查現在最新的 SHA
+        current_file = repo.get_contents(FILE_PATH)
+        latest_sha = current_file.sha
+        # 2. 用最新的 SHA 進行安全覆蓋
+        res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, latest_sha)
+        return res['content'].sha
     except GithubException as e:
+        # 3. 404 = 檔案不存在，直接建立新檔案
         if getattr(e, 'status', 0) == 404:
             res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
             return res['content'].sha
