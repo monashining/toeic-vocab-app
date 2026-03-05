@@ -7,6 +7,7 @@ import io
 import re
 from urllib.parse import quote_plus
 from github import Github
+from github.GithubException import GithubException
 import base64
 from deep_translator import GoogleTranslator
 from gtts import gTTS
@@ -125,13 +126,31 @@ def _toggle_mastered(df, word, mastered):
     st.session_state.file_sha = new_sha
 
 def save_vocab_data(df, sha):
+    """儲存單字到 GitHub，若 SHA 過期會自動重試取得最新版本"""
     csv_content = df.to_csv(index=False)
-    if sha:
-        res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, sha)
-        return res['content'].sha
-    else:
-        res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
-        return res['content'].sha
+    try:
+        if sha:
+            try:
+                res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, sha)
+                return res['content'].sha
+            except GithubException as e:
+                # 422 = SHA 不符（檔案已被修改），重新取得最新 SHA 再試
+                if getattr(e, 'status', 0) in (404, 422):
+                    try:
+                        file_content = repo.get_contents(FILE_PATH)
+                        res = repo.update_file(FILE_PATH, "Update vocab list", csv_content, file_content.sha)
+                        return res['content'].sha
+                    except Exception:
+                        raise
+                raise
+        else:
+            res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
+            return res['content'].sha
+    except GithubException as e:
+        if getattr(e, 'status', 0) == 404:
+            res = repo.create_file(FILE_PATH, "Create vocab list", csv_content)
+            return res['content'].sha
+        raise
 
 # ★ 核心修正：為 App 加入記憶體，避免 GitHub 快取延遲 ★
 if 'vocab_df' not in st.session_state:
@@ -209,9 +228,16 @@ def get_dict_info(word):
     except Exception:
         return "未知", "請至管理區手動輸入"
 
+def get_audio_url(word):
+    """取得發音 URL（有道字典，iOS Safari 相容性較佳）"""
+    clean = str(word).strip().lower()
+    if not clean:
+        return None
+    return f"https://dict.youdao.com/dictvoice?type=0&audio={quote_plus(clean)}"
+
 @st.cache_data(show_spinner=False)
 def get_audio_bytes(word):
-    """使用 gTTS 產生發音（Google 舊 TTS API 已棄用）"""
+    """備援：gTTS 產生發音（當 URL 無法使用時）"""
     try:
         tts = gTTS(text=word, lang='en')
         fp = io.BytesIO()
@@ -220,6 +246,20 @@ def get_audio_bytes(word):
         return fp.getvalue()
     except Exception:
         return None
+
+def render_audio_player(word, key_suffix=""):
+    """渲染發音播放器（優先有道 URL，iOS Safari 相容性較佳）"""
+    url = get_audio_url(word)
+    if url:
+        st.audio(url, format="audio/mpeg")
+        # iOS 備援：若內嵌無法播放，點連結用系統播放器
+        st.markdown(f'<a href="{url}" target="_blank" rel="noopener" style="font-size:12px">📱 新分頁播放</a>', unsafe_allow_html=True)
+    else:
+        data = get_audio_bytes(word)
+        if data:
+            st.audio(data, format="audio/mpeg")
+        else:
+            st.caption("無法取得語音")
 
 # ==========================================
 # 4. Streamlit 介面設計
@@ -325,13 +365,7 @@ with tab2:
                                 _toggle_mastered(df, row["單字"], True)
                                 st.rerun()
                     with col_audio:
-                        # 點擊才載入發音，減少首載負荷
-                        if st.button("🔊", key=f"play_{row['單字']}_{i}", help="播放發音", use_container_width=True):
-                            audio_data = get_audio_bytes(row["單字"])
-                            if audio_data:
-                                st.audio(audio_data, format="audio/mp3", autoplay=True)
-                            else:
-                                st.caption("無法取得")
+                        render_audio_player(row["單字"], key_suffix=f"_{i}")
 
 # --- 分頁 3：記憶卡考試 ---
 with tab3:
@@ -407,9 +441,7 @@ with tab3:
             
             # 發音（僅英文題目時顯示）
             if st.session_state.quiz_mode == "en_to_zh":
-                audio_data = get_audio_bytes(current["單字"])
-                if audio_data:
-                    st.audio(audio_data, format="audio/mp3")
+                render_audio_player(current["單字"], key_suffix="_q")
             
             # 翻面 / 顯示答案
             if not st.session_state.quiz_flipped:
@@ -420,9 +452,7 @@ with tab3:
                 st.markdown("### 答案")
                 st.success(f"**{answer}**")
                 if st.session_state.quiz_mode == "zh_to_en":
-                    audio_data = get_audio_bytes(current["單字"])
-                    if audio_data:
-                        st.audio(audio_data, format="audio/mp3")
+                    render_audio_player(current["單字"], key_suffix="_a")
                 
                 col_prev, col_next, _ = st.columns([1, 1, 2])
                 with col_prev:
@@ -452,8 +482,12 @@ with tab4:
     
     if "已記住" not in df.columns:
         df["已記住"] = ""
+    # 確保所有欄位為字串，避免 data_editor 類型相容性錯誤（NaN/float 混用）
+    editor_df = df.copy()
+    for col in editor_df.columns:
+        editor_df[col] = editor_df[col].fillna("").astype(str).replace("nan", "")
     edited_df = st.data_editor(
-        df.copy(),
+        editor_df,
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
