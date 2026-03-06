@@ -282,6 +282,8 @@ def get_dict_info(word):
     # 片語（含空格的 multi-word）若詞性仍未知，預設為 ph.（Yahoo 常把 ph. 與解釋分開）
     if pos == "未知" and " " in clean_word:
         pos = "ph."
+        # 若 ph. 仍殘留在中文解釋開頭（正則未匹配到時），一併移除
+        meaning = re.sub(r'^ph\s*\.\s*', '', meaning, flags=re.I).strip()
     
     return pos, meaning, phonetic
 
