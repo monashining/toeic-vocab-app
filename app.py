@@ -269,11 +269,14 @@ def get_dict_info(word):
         except Exception:
             meaning = "請至管理區手動輸入"
     
+    # 正規化：全形→半形、多種空白→單一空格（解決 Yahoo 回傳格式不一致）
+    meaning = re.sub(r'[\u3000\u00A0\s]+', ' ', meaning).strip()
+    meaning = meaning.replace('．', '.').replace('，', ',')
     # 移除中文解釋開頭的詞性（如 "n. 陽臺"、"ph. 盡管..." → 純中文），並將詞性填入 pos
-    pos_match = re.match(r'^(ph\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', meaning, re.I)
+    pos_match = re.match(r'^(ph\s*\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', meaning, re.I)
     if pos_match and pos == "未知":
-        pos = pos_match.group(1).strip()
-    meaning = re.sub(r'^(ph\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
+        pos = re.sub(r'\s+', '', pos_match.group(1))  # "ph ." → "ph."
+    meaning = re.sub(r'^(ph\s*\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
     # 移除開頭的英文單字（如 "silverware 銀製品" → "銀製品"）
     meaning = re.sub(r'^([a-zA-Z\-]+\s+)+', '', meaning).strip()
     
