@@ -187,7 +187,8 @@ def get_dict_info(word):
                     "noun": "n.", "verb": "v.", "adjective": "adj.",
                     "adverb": "adv.", "pronoun": "pron.", "preposition": "prep.",
                     "conjunction": "conj.", "interjection": "int.", "exclamation": "int.",
-                    "transitive verb": "vt.", "intransitive verb": "vi."
+                    "transitive verb": "vt.", "intransitive verb": "vi.",
+                    "phrase": "ph.", "phrasal verb": "ph."
                 }
                 pos = pos_map.get(raw_pos.lower(), raw_pos) if raw_pos else "未知"
     except Exception:
@@ -231,8 +232,8 @@ def get_dict_info(word):
                     continue
                 if any(x in text for x in EXCLUDE) or text in EXCLUDE:
                     continue
-                # 跳過純音標、純詞性
-                if re.match(r'^(IPA|KK)?\s*\[.*\]\s*$', text) or text in ('vt.', 'vi.', 'n.', 'adj.', 'adv.'):
+                # 跳過純音標、純詞性（含片語 ph.）
+                if re.match(r'^(IPA|KK)?\s*\[.*\]\s*$', text) or text in ('vt.', 'vi.', 'n.', 'adj.', 'adv.', 'ph.'):
                     continue
                 candidates.append(text)
             # 優先選含「；」或「,」的（典型解釋格式如「改正; 修復」）
@@ -268,8 +269,11 @@ def get_dict_info(word):
         except Exception:
             meaning = "請至管理區手動輸入"
     
-    # 移除中文解釋開頭的詞性（如 "n. 陽臺" → "陽臺"）
-    meaning = re.sub(r'^(vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
+    # 移除中文解釋開頭的詞性（如 "n. 陽臺"、"ph. 盡管..." → 純中文），並將詞性填入 pos
+    pos_match = re.match(r'^(ph\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', meaning, re.I)
+    if pos_match and pos == "未知":
+        pos = pos_match.group(1).strip()
+    meaning = re.sub(r'^(ph\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
     # 移除開頭的英文單字（如 "silverware 銀製品" → "銀製品"）
     meaning = re.sub(r'^([a-zA-Z\-]+\s+)+', '', meaning).strip()
     
