@@ -279,6 +279,9 @@ def get_dict_info(word):
     meaning = re.sub(r'^(ph\s*\.|vt\.|vi\.|n\.|adj\.|adv\.|prep\.|conj\.|v\.|pron\.|int\.)\s*', '', meaning, flags=re.I).strip()
     # 移除開頭的英文單字（如 "silverware 銀製品" → "銀製品"）
     meaning = re.sub(r'^([a-zA-Z\-]+\s+)+', '', meaning).strip()
+    # 片語（含空格的 multi-word）若詞性仍未知，預設為 ph.（Yahoo 常把 ph. 與解釋分開）
+    if pos == "未知" and " " in clean_word:
+        pos = "ph."
     
     return pos, meaning, phonetic
 
