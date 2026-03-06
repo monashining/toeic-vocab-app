@@ -329,17 +329,18 @@ if not df.empty:
     mastered = 0
     if "已記住" in df.columns:
         mastered = df["已記住"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1")).sum()
-    st.caption(f"📊 共 {len(df)} 個單字" + (f"（已記住 {int(mastered)}）" if mastered > 0 else ""))
+    st.caption(f"📊 共 {len(df)} 個單字／片語" + (f"（已記住 {int(mastered)}）" if mastered > 0 else ""))
 
 tab1, tab2, tab3, tab4 = st.tabs(["➕ 新增", "🌙 複習", "🃏 記憶卡考試", "✏️ 管理"])
 
 # --- 分頁 1：新增單字 ---
 with tab1:
     with st.form(key="add_word_form", clear_on_submit=True):
-        new_word = st.text_input("輸入不熟的英文單字：", autocomplete="off").strip().lower()
+        new_word = st.text_input("輸入不熟的英文單字或片語：", placeholder="例如：abandon、give up、break down", autocomplete="off").strip().lower()
         submit_button = st.form_submit_button(label="新增並自動查字典", use_container_width=True)
         
     if submit_button and new_word:
+        new_word = ' '.join(new_word.split())  # 正規化多餘空白（片語用）
         if new_word in df['單字'].values:
             st.warning(f"「**{new_word}**」已經在你的單字庫裡囉！")
         else:
