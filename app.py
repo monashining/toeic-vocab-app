@@ -102,7 +102,7 @@ except Exception as e:
     st.error(f"⚠️ 無法連線 GitHub：{e}")
     st.stop()
 
-DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "音標", "還不熟", "已記住"]
+DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "音標", "備註", "還不熟", "已記住"]
 
 def get_vocab_data():
     try:
@@ -111,6 +111,8 @@ def get_vocab_data():
         df = pd.read_csv(io.StringIO(decoded_content))
         if "音標" not in df.columns:
             df["音標"] = ""
+        if "備註" not in df.columns:
+            df["備註"] = ""
         if "還不熟" not in df.columns:
             df["還不熟"] = ""
         if "已記住" not in df.columns:
@@ -144,6 +146,16 @@ def _toggle_unfamiliar(df, word, unfamiliar):
     df.loc[mask, "還不熟"] = "✓" if unfamiliar else ""
     if unfamiliar:
         df.loc[mask, "已記住"] = ""
+    new_sha = save_vocab_data(df, file_sha)
+    st.session_state.vocab_df = df
+    st.session_state.file_sha = new_sha
+
+def _update_note(df, word, note):
+    """更新單字的備註"""
+    if "備註" not in df.columns:
+        df["備註"] = ""
+    mask = df["單字"] == word
+    df.loc[mask, "備註"] = str(note or "").strip()
     new_sha = save_vocab_data(df, file_sha)
     st.session_state.vocab_df = df
     st.session_state.file_sha = new_sha
@@ -393,7 +405,7 @@ with tab1:
                     if c not in df_add.columns:
                         df_add[c] = ""
                 df_add = df_add[DEFAULT_COLUMNS]
-                new_row = pd.DataFrame([[today, new_word, pos, meaning, phonetic, "", ""]], columns=DEFAULT_COLUMNS)
+                new_row = pd.DataFrame([[today, new_word, pos, meaning, phonetic, "", "", ""]], columns=DEFAULT_COLUMNS)
                 new_df = pd.concat([df_add, new_row], ignore_index=True)
                 
                 # ★ 存檔並同步更新記憶體 ★
@@ -419,6 +431,8 @@ with tab2:
             sort_order = st.selectbox("排序", ["最新優先", "最舊優先", "隨機"], key="review_sort")
         
         df_review = df.copy()
+        if "備註" not in df_review.columns:
+            df_review["備註"] = ""
         if "已記住" not in df_review.columns:
             df_review["已記住"] = ""
         if "還不熟" not in df_review.columns:
@@ -438,6 +452,8 @@ with tab2:
                    df_review["中文解釋"].str.contains(search, case=False, na=False)
             if "音標" in df_review.columns:
                 mask = mask | df_review["音標"].fillna("").astype(str).str.contains(search, case=False, na=False)
+            if "備註" in df_review.columns:
+                mask = mask | df_review["備註"].fillna("").astype(str).str.contains(search, case=False, na=False)
             df_review = df_review[mask]
         if sort_order == "最新優先":
             df_review = df_review.iloc[::-1].reset_index(drop=True)
@@ -467,25 +483,39 @@ with tab2:
                         elif row_unfamiliar:
                             col_m1, col_m2 = st.columns(2)
                             with col_m1:
-                                if st.button("↩️", key=f"unfam_{row['單字']}_{i}", help="取消還不熟", use_container_width=True):
+                                if st.button("↩️ 取消還不熟", key=f"unfam_{row['單字']}_{i}", help="取消還不熟標記", use_container_width=True):
                                     _toggle_unfamiliar(df, row["單字"], False)
                                     st.rerun()
                             with col_m2:
-                                if st.button("✓", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
+                                if st.button("✓ 已記住", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
                                     _toggle_mastered(df, row["單字"], True)
                                     st.rerun()
                         else:
                             col_m1, col_m2 = st.columns(2)
                             with col_m1:
-                                if st.button("✓", key=f"mark_{row['單字']}_{i}", help="已記住", use_container_width=True):
+                                if st.button("✓ 已記住", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
                                     _toggle_mastered(df, row["單字"], True)
                                     st.rerun()
                             with col_m2:
-                                if st.button("📌", key=f"unfam_{row['單字']}_{i}", help="還不熟", use_container_width=True):
+                                if st.button("📌 還不熟", key=f"unfam_{row['單字']}_{i}", help="標記為還不熟，之後可針對這些單字考試", use_container_width=True):
                                     _toggle_unfamiliar(df, row["單字"], True)
                                     st.rerun()
                     with col_audio:
                         render_audio_player(row["單字"], key_suffix=f"_{i}")
+                    # 備註區：可記錄用法、文法、發音等
+                    note_val = str(row.get("備註", "") or "").strip()
+                    with st.expander("📝 備註（用法、文法、發音等）", expanded=bool(note_val)):
+                        new_note = st.text_area(
+                            "記錄使用方法、例句、文法或發音重點",
+                            value=note_val,
+                            height=80,
+                            key=f"note_{row['單字']}_{i}",
+                            placeholder="例如：give up 後接 V-ing；發音注意 /ɡɪv/",
+                            label_visibility="collapsed"
+                        )
+                        if st.button("💾 儲存備註", key=f"save_note_{row['單字']}_{i}", use_container_width=True):
+                            _update_note(df, row["單字"], new_note)
+                            st.rerun()
 
 # --- 分頁 3：記憶卡考試 ---
 with tab3:
@@ -601,6 +631,8 @@ with tab4:
     if 'editor_version' not in st.session_state:
         st.session_state.editor_version = 0
     
+    if "備註" not in df.columns:
+        df["備註"] = ""
     if "還不熟" not in df.columns:
         df["還不熟"] = ""
     if "已記住" not in df.columns:
