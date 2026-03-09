@@ -504,7 +504,7 @@ with tab2:
                         render_audio_player(row["單字"], key_suffix=f"_{i}")
                     # 備註區：可記錄用法、文法、發音等
                     note_val = str(row.get("備註", "") or "").strip()
-                    with st.expander("📝 備註（用法、文法、發音等）", expanded=bool(note_val)):
+                    with st.expander("📝 備註", expanded=bool(note_val)):
                         new_note = st.text_area(
                             "記錄使用方法、例句、文法或發音重點",
                             value=note_val,
