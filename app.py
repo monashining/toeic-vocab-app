@@ -122,8 +122,9 @@ def get_vocab_data():
     except Exception:
         return pd.DataFrame(columns=DEFAULT_COLUMNS), None
 
-def _toggle_mastered(df, word, mastered):
-    """切換單字的已記住狀態"""
+def _toggle_mastered_memory(word, mastered):
+    """切換單字的已記住狀態（僅更新記憶體，不觸發 GitHub 寫入）"""
+    df = st.session_state.vocab_df.copy()
     if "已記住" not in df.columns:
         df["已記住"] = ""
     if "還不熟" not in df.columns:
@@ -132,12 +133,12 @@ def _toggle_mastered(df, word, mastered):
     df.loc[mask, "已記住"] = "✓" if mastered else ""
     if mastered:
         df.loc[mask, "還不熟"] = ""
-    new_sha = save_vocab_data(df, file_sha)
     st.session_state.vocab_df = df
-    st.session_state.file_sha = new_sha
+    st.session_state.unsaved_changes = True
 
-def _toggle_unfamiliar(df, word, unfamiliar):
-    """切換單字的還不熟狀態"""
+def _toggle_unfamiliar_memory(word, unfamiliar):
+    """切換單字的還不熟狀態（僅更新記憶體，不觸發 GitHub 寫入）"""
+    df = st.session_state.vocab_df.copy()
     if "還不熟" not in df.columns:
         df["還不熟"] = ""
     if "已記住" not in df.columns:
@@ -146,19 +147,18 @@ def _toggle_unfamiliar(df, word, unfamiliar):
     df.loc[mask, "還不熟"] = "✓" if unfamiliar else ""
     if unfamiliar:
         df.loc[mask, "已記住"] = ""
-    new_sha = save_vocab_data(df, file_sha)
     st.session_state.vocab_df = df
-    st.session_state.file_sha = new_sha
+    st.session_state.unsaved_changes = True
 
-def _update_note(df, word, note):
-    """更新單字的備註"""
+def _update_note_memory(word, note):
+    """更新單字的備註（僅更新記憶體，不觸發 GitHub 寫入）"""
+    df = st.session_state.vocab_df.copy()
     if "備註" not in df.columns:
         df["備註"] = ""
     mask = df["單字"] == word
     df.loc[mask, "備註"] = str(note or "").strip()
-    new_sha = save_vocab_data(df, file_sha)
     st.session_state.vocab_df = df
-    st.session_state.file_sha = new_sha
+    st.session_state.unsaved_changes = True
 
 def save_vocab_data(df, sha=None):
     """終極儲存方案：忽略舊 SHA，每次寫入前即時抓取最新 SHA，徹底杜絕衝突"""
@@ -182,6 +182,8 @@ if 'vocab_df' not in st.session_state:
     df, sha = get_vocab_data()
     st.session_state.vocab_df = df
     st.session_state.file_sha = sha
+if 'unsaved_changes' not in st.session_state:
+    st.session_state.unsaved_changes = False
 
 # 從記憶體讀取最新狀態
 df = st.session_state.vocab_df
@@ -366,6 +368,7 @@ with col_reload:
             df_new, sha_new = get_vocab_data()
             st.session_state.vocab_df = df_new
             st.session_state.file_sha = sha_new
+            st.session_state.unsaved_changes = False
             st.success("已同步最新資料")
             st.rerun()
         except Exception as e:
@@ -418,6 +421,18 @@ with tab1:
 
 # --- 分頁 2：夜晚複習 ---
 with tab2:
+    # 提示有未儲存的變更，並提供統一的批次存檔按鈕
+    if st.session_state.unsaved_changes:
+        st.warning("⚠️ 記憶體中有未同步的進度！")
+        if st.button("💾 點我將所有變更同步至 GitHub", use_container_width=True):
+            with st.spinner("同步至 GitHub 中..."):
+                new_sha = save_vocab_data(st.session_state.vocab_df, st.session_state.file_sha)
+                st.session_state.file_sha = new_sha
+                st.session_state.unsaved_changes = False
+                st.success("✅ 同步完成！")
+                st.rerun()
+        st.markdown("---")
+    
     if df.empty:
         st.info("目前還沒有單字喔！")
     else:
@@ -478,27 +493,27 @@ with tab2:
                     with col_mark:
                         if row_mastered:
                             if st.button("↩️ 取消", key=f"unmark_{row['單字']}_{i}", help="標記為未記住", use_container_width=True):
-                                _toggle_mastered(df, row["單字"], False)
+                                _toggle_mastered_memory(row["單字"], False)
                                 st.rerun()
                         elif row_unfamiliar:
                             col_m1, col_m2 = st.columns(2)
                             with col_m1:
                                 if st.button("↩️ 取消還不熟", key=f"unfam_{row['單字']}_{i}", help="取消還不熟標記", use_container_width=True):
-                                    _toggle_unfamiliar(df, row["單字"], False)
+                                    _toggle_unfamiliar_memory(row["單字"], False)
                                     st.rerun()
                             with col_m2:
                                 if st.button("✓ 已記住", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
-                                    _toggle_mastered(df, row["單字"], True)
+                                    _toggle_mastered_memory(row["單字"], True)
                                     st.rerun()
                         else:
                             col_m1, col_m2 = st.columns(2)
                             with col_m1:
                                 if st.button("✓ 已記住", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
-                                    _toggle_mastered(df, row["單字"], True)
+                                    _toggle_mastered_memory(row["單字"], True)
                                     st.rerun()
                             with col_m2:
                                 if st.button("📌 還不熟", key=f"unfam_{row['單字']}_{i}", help="標記為還不熟，之後可針對這些單字考試", use_container_width=True):
-                                    _toggle_unfamiliar(df, row["單字"], True)
+                                    _toggle_unfamiliar_memory(row["單字"], True)
                                     st.rerun()
                     with col_audio:
                         render_audio_player(row["單字"], key_suffix=f"_{i}")
@@ -514,7 +529,7 @@ with tab2:
                             label_visibility="collapsed"
                         )
                         if st.button("💾 儲存備註", key=f"save_note_{row['單字']}_{i}", use_container_width=True):
-                            _update_note(df, row["單字"], new_note)
+                            _update_note_memory(row["單字"], new_note)
                             st.rerun()
 
 # --- 分頁 3：記憶卡考試 ---
@@ -535,10 +550,8 @@ with tab3:
             quiz_df = df.copy()
             quiz_scope = "全部單字"
             if "已記住" in quiz_df.columns:
-                quiz_scope = st.radio("出題範圍", ["全部單字", "僅未記住", "僅還不熟"], horizontal=True)
-                if "未記住" in quiz_scope:
-                    quiz_df = quiz_df[~quiz_df["已記住"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1"))]
-                elif "還不熟" in quiz_scope:
+                quiz_scope = st.radio("出題範圍", ["全部單字", "僅還不熟"], horizontal=True)
+                if "還不熟" in quiz_scope:
                     if "還不熟" not in quiz_df.columns:
                         quiz_df["還不熟"] = ""
                     quiz_df = quiz_df[quiz_df["還不熟"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1"))]
@@ -637,10 +650,18 @@ with tab4:
         df["還不熟"] = ""
     if "已記住" not in df.columns:
         df["已記住"] = ""
-    # ★ 預防當機：把所有空值變成空字串，強制全體轉為文字格式 ★
-    safe_df = df.fillna("").astype(str)
+    # ★ 前處理：將 "✓" 轉為布林值供 editor 渲染成 Checkbox ★
+    safe_df = df.fillna("").astype(str).copy()
+    safe_df["已記住_勾選"] = safe_df["已記住"].apply(lambda x: str(x).strip() in ("✓", "是", "1"))
+    safe_df["還不熟_勾選"] = safe_df["還不熟"].apply(lambda x: str(x).strip() in ("✓", "是", "1"))
+    
     edited_df = st.data_editor(
         safe_df,
+        column_config={
+            "已記住_勾選": st.column_config.CheckboxColumn("已記住", default=False),
+            "還不熟_勾選": st.column_config.CheckboxColumn("還不熟", default=False),
+        },
+        column_order=["日期", "單字", "詞性", "中文解釋", "音標", "備註", "已記住_勾選", "還不熟_勾選"],
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
@@ -655,10 +676,15 @@ with tab4:
                 st.warning("無法儲存空清單，請至少保留一筆單字。")
             else:
                 with st.spinner("同步中..."):
-                    new_sha = save_vocab_data(edited_df, file_sha)
-                    st.session_state.vocab_df = edited_df.reset_index(drop=True)
+                    # ★ 後處理：將 Checkbox 的 Boolean 轉回 "✓" 或 "" ★
+                    edited_df["已記住"] = edited_df["已記住_勾選"].apply(lambda x: "✓" if x else "")
+                    edited_df["還不熟"] = edited_df["還不熟_勾選"].apply(lambda x: "✓" if x else "")
+                    final_df = edited_df[DEFAULT_COLUMNS]
+                    new_sha = save_vocab_data(final_df, file_sha)
+                    st.session_state.vocab_df = final_df.reset_index(drop=True)
                     st.session_state.file_sha = new_sha
-                    st.session_state.editor_version += 1  # 強制 data_editor 重新載入
+                    st.session_state.unsaved_changes = False
+                    st.session_state.editor_version += 1
                     st.success("✅ 修改已成功儲存！複習頁已同步更新。")
                     st.rerun()
     
@@ -674,9 +700,13 @@ with tab4:
         if st.button("🗑️ 刪除所選", use_container_width=True) and to_delete:
             remaining_df = edited_df[~edited_df["單字"].isin(to_delete)].reset_index(drop=True)
             with st.spinner("刪除中..."):
-                new_sha = save_vocab_data(remaining_df, file_sha)
-                st.session_state.vocab_df = remaining_df
+                remaining_df["已記住"] = remaining_df["已記住_勾選"].apply(lambda x: "✓" if x else "")
+                remaining_df["還不熟"] = remaining_df["還不熟_勾選"].apply(lambda x: "✓" if x else "")
+                final_remaining = remaining_df[DEFAULT_COLUMNS]
+                new_sha = save_vocab_data(final_remaining, file_sha)
+                st.session_state.vocab_df = final_remaining
                 st.session_state.file_sha = new_sha
+                st.session_state.unsaved_changes = False
                 st.session_state.editor_version += 1
                 st.success(f"✅ 已刪除 {len(to_delete)} 個單字")
                 st.rerun()
