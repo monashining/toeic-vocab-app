@@ -102,17 +102,20 @@ except Exception as e:
     st.error(f"⚠️ 無法連線 GitHub：{e}")
     st.stop()
 
-DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "音標", "已記住"]
+DEFAULT_COLUMNS = ["日期", "單字", "詞性", "中文解釋", "音標", "還不熟", "已記住"]
 
 def get_vocab_data():
     try:
         file_content = repo.get_contents(FILE_PATH)
         decoded_content = base64.b64decode(file_content.content).decode('utf-8')
         df = pd.read_csv(io.StringIO(decoded_content))
-        if "已記住" not in df.columns:
-            df["已記住"] = ""
         if "音標" not in df.columns:
             df["音標"] = ""
+        if "還不熟" not in df.columns:
+            df["還不熟"] = ""
+        if "已記住" not in df.columns:
+            df["已記住"] = ""
+        df = df[[c for c in DEFAULT_COLUMNS if c in df.columns]]
         return df, file_content.sha
     except Exception:
         return pd.DataFrame(columns=DEFAULT_COLUMNS), None
@@ -121,8 +124,26 @@ def _toggle_mastered(df, word, mastered):
     """切換單字的已記住狀態"""
     if "已記住" not in df.columns:
         df["已記住"] = ""
+    if "還不熟" not in df.columns:
+        df["還不熟"] = ""
     mask = df["單字"] == word
     df.loc[mask, "已記住"] = "✓" if mastered else ""
+    if mastered:
+        df.loc[mask, "還不熟"] = ""
+    new_sha = save_vocab_data(df, file_sha)
+    st.session_state.vocab_df = df
+    st.session_state.file_sha = new_sha
+
+def _toggle_unfamiliar(df, word, unfamiliar):
+    """切換單字的還不熟狀態"""
+    if "還不熟" not in df.columns:
+        df["還不熟"] = ""
+    if "已記住" not in df.columns:
+        df["已記住"] = ""
+    mask = df["單字"] == word
+    df.loc[mask, "還不熟"] = "✓" if unfamiliar else ""
+    if unfamiliar:
+        df.loc[mask, "已記住"] = ""
     new_sha = save_vocab_data(df, file_sha)
     st.session_state.vocab_df = df
     st.session_state.file_sha = new_sha
@@ -339,9 +360,17 @@ with col_reload:
             st.error(f"同步失敗：{e}")
 if not df.empty:
     mastered = 0
+    unfamiliar = 0
     if "已記住" in df.columns:
         mastered = df["已記住"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1")).sum()
-    st.caption(f"📊 共 {len(df)} 個單字／片語" + (f"（已記住 {int(mastered)}）" if mastered > 0 else ""))
+    if "還不熟" in df.columns:
+        unfamiliar = df["還不熟"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1")).sum()
+    parts = [f"共 {len(df)} 個單字／片語"]
+    if mastered > 0:
+        parts.append(f"已記住 {int(mastered)}")
+    if unfamiliar > 0:
+        parts.append(f"還不熟 {int(unfamiliar)}")
+    st.caption("📊 " + " · ".join(parts))
 
 tab1, tab2, tab3, tab4 = st.tabs(["➕ 新增", "🌙 複習", "🃏 記憶卡考試", "✏️ 管理"])
 
@@ -364,7 +393,7 @@ with tab1:
                     if c not in df_add.columns:
                         df_add[c] = ""
                 df_add = df_add[DEFAULT_COLUMNS]
-                new_row = pd.DataFrame([[today, new_word, pos, meaning, phonetic, ""]], columns=DEFAULT_COLUMNS)
+                new_row = pd.DataFrame([[today, new_word, pos, meaning, phonetic, "", ""]], columns=DEFAULT_COLUMNS)
                 new_df = pd.concat([df_add, new_row], ignore_index=True)
                 
                 # ★ 存檔並同步更新記憶體 ★
@@ -385,19 +414,25 @@ with tab2:
         with col_search:
             search = st.text_input("🔍 搜尋單字或解釋", placeholder="輸入關鍵字篩選...", key="review_search")
         with col_master:
-            master_filter = st.selectbox("熟練度", ["全部", "未記住", "已記住"], key="review_master")
+            master_filter = st.selectbox("熟練度", ["全部", "未記住", "已記住", "還不熟"], key="review_master")
         with col_sort:
             sort_order = st.selectbox("排序", ["最新優先", "最舊優先", "隨機"], key="review_sort")
         
         df_review = df.copy()
         if "已記住" not in df_review.columns:
             df_review["已記住"] = ""
+        if "還不熟" not in df_review.columns:
+            df_review["還不熟"] = ""
         def _is_mastered(val):
+            return str(val or "").strip() in ("✓", "是", "1")
+        def _is_unfamiliar(val):
             return str(val or "").strip() in ("✓", "是", "1")
         if master_filter == "已記住":
             df_review = df_review[df_review["已記住"].apply(_is_mastered)]
         elif master_filter == "未記住":
             df_review = df_review[~df_review["已記住"].apply(_is_mastered)]
+        elif master_filter == "還不熟":
+            df_review = df_review[df_review["還不熟"].apply(_is_unfamiliar)]
         if search:
             mask = df_review["單字"].str.contains(search, case=False, na=False) | \
                    df_review["中文解釋"].str.contains(search, case=False, na=False)
@@ -414,6 +449,7 @@ with tab2:
         else:
             for i, (_, row) in enumerate(df_review.iterrows()):
                 row_mastered = _is_mastered(row.get("已記住", ""))
+                row_unfamiliar = _is_unfamiliar(row.get("還不熟", ""))
                 with st.container(border=True):
                     col_word, col_mark, col_audio = st.columns([3, 1, 1])
                     with col_word:
@@ -421,16 +457,33 @@ with tab2:
                         phonetic_str = str(row.get("音標", "")).strip()
                         meaning_str = str(row.get("中文解釋", "")).strip()
                         st.markdown(f"**{row.get('詞性', '')}** {meaning_str}" + (f"  _{phonetic_str}_" if phonetic_str else ""))
-                        st.caption(f"加入日期：{row.get('日期', '')}" + (" ✓ 已記住" if row_mastered else ""))
+                        status = "✓ 已記住" if row_mastered else ("📌 還不熟" if row_unfamiliar else "")
+                        st.caption(f"加入日期：{row.get('日期', '')}" + (f" {status}" if status else ""))
                     with col_mark:
                         if row_mastered:
                             if st.button("↩️ 取消", key=f"unmark_{row['單字']}_{i}", help="標記為未記住", use_container_width=True):
                                 _toggle_mastered(df, row["單字"], False)
                                 st.rerun()
+                        elif row_unfamiliar:
+                            col_m1, col_m2 = st.columns(2)
+                            with col_m1:
+                                if st.button("↩️", key=f"unfam_{row['單字']}_{i}", help="取消還不熟", use_container_width=True):
+                                    _toggle_unfamiliar(df, row["單字"], False)
+                                    st.rerun()
+                            with col_m2:
+                                if st.button("✓", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
+                                    _toggle_mastered(df, row["單字"], True)
+                                    st.rerun()
                         else:
-                            if st.button("✓ 已記住", key=f"mark_{row['單字']}_{i}", help="標記為已記住", use_container_width=True):
-                                _toggle_mastered(df, row["單字"], True)
-                                st.rerun()
+                            col_m1, col_m2 = st.columns(2)
+                            with col_m1:
+                                if st.button("✓", key=f"mark_{row['單字']}_{i}", help="已記住", use_container_width=True):
+                                    _toggle_mastered(df, row["單字"], True)
+                                    st.rerun()
+                            with col_m2:
+                                if st.button("📌", key=f"unfam_{row['單字']}_{i}", help="還不熟", use_container_width=True):
+                                    _toggle_unfamiliar(df, row["單字"], True)
+                                    st.rerun()
                     with col_audio:
                         render_audio_player(row["單字"], key_suffix=f"_{i}")
 
@@ -450,10 +503,15 @@ with tab3:
         # 設定區（僅支援：看英文 → 猜中文）
         with st.expander("⚙️ 考試設定", expanded=len(st.session_state.quiz_pool) == 0):
             quiz_df = df.copy()
+            quiz_scope = "全部單字"
             if "已記住" in quiz_df.columns:
-                quiz_scope = st.radio("出題範圍", ["全部單字", "僅未記住"], horizontal=True)
+                quiz_scope = st.radio("出題範圍", ["全部單字", "僅未記住", "僅還不熟"], horizontal=True)
                 if "未記住" in quiz_scope:
                     quiz_df = quiz_df[~quiz_df["已記住"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1"))]
+                elif "還不熟" in quiz_scope:
+                    if "還不熟" not in quiz_df.columns:
+                        quiz_df["還不熟"] = ""
+                    quiz_df = quiz_df[quiz_df["還不熟"].apply(lambda v: str(v or "").strip() in ("✓", "是", "1"))]
             
             num_options = [5, 10, 20, 50, "全部"]
             num_choice = st.selectbox("題數", num_options, format_func=lambda x: str(x) if x != "全部" else "全部")
@@ -462,7 +520,12 @@ with tab3:
             if st.button("🔄 開始 / 重新開始", use_container_width=True):
                 n = min(num, len(quiz_df))
                 if n == 0:
-                    st.warning("沒有可考的單字（可能已全部標記為已記住）")
+                    msg = "沒有可考的單字"
+                    if "僅還不熟" in quiz_scope:
+                        msg += "（請先在複習頁標記「還不熟」的單字）"
+                    else:
+                        msg += "（可能已全部標記為已記住）"
+                    st.warning(msg)
                 else:
                     pool = quiz_df.sample(n=n, replace=False).reset_index(drop=True)
                     st.session_state.quiz_pool = pool.to_dict('records')
@@ -538,6 +601,8 @@ with tab4:
     if 'editor_version' not in st.session_state:
         st.session_state.editor_version = 0
     
+    if "還不熟" not in df.columns:
+        df["還不熟"] = ""
     if "已記住" not in df.columns:
         df["已記住"] = ""
     # ★ 預防當機：把所有空值變成空字串，強制全體轉為文字格式 ★
