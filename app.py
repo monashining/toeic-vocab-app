@@ -113,6 +113,7 @@ def get_vocab_data():
             df["音標"] = ""
         if "備註" not in df.columns:
             df["備註"] = ""
+        df["備註"] = df["備註"].fillna("").astype(str).apply(lambda x: "" if x.strip().lower() == "nan" else x)
         if "還不熟" not in df.columns:
             df["還不熟"] = ""
         if "已記住" not in df.columns:
@@ -150,19 +151,27 @@ def _toggle_unfamiliar_memory(word, unfamiliar):
     st.session_state.vocab_df = df
     st.session_state.unsaved_changes = True
 
+def _clean_note(val):
+    """將 nan、NaN 等無效值轉為空字串"""
+    s = str(val or "").strip()
+    return "" if s.lower() in ("nan", "none") else s
+
 def _update_note_memory(word, note):
     """更新單字的備註（僅更新記憶體，不觸發 GitHub 寫入）"""
     df = st.session_state.vocab_df.copy()
     if "備註" not in df.columns:
         df["備註"] = ""
     mask = df["單字"] == word
-    df.loc[mask, "備註"] = str(note or "").strip()
+    df.loc[mask, "備註"] = _clean_note(note)
     st.session_state.vocab_df = df
     st.session_state.unsaved_changes = True
 
 def save_vocab_data(df, sha=None):
     """終極儲存方案：忽略舊 SHA，每次寫入前即時抓取最新 SHA，徹底杜絕衝突"""
-    csv_content = df.to_csv(index=False)
+    df_save = df.copy()
+    if "備註" in df_save.columns:
+        df_save["備註"] = df_save["備註"].fillna("").astype(str).apply(lambda x: "" if x.strip().lower() == "nan" else x)
+    csv_content = df_save.to_csv(index=False)
     try:
         # 1. 每次存檔前，強制去 GitHub 查現在最新的 SHA
         current_file = repo.get_contents(FILE_PATH)
@@ -517,8 +526,8 @@ with tab2:
                                     st.rerun()
                     with col_audio:
                         render_audio_player(row["單字"], key_suffix=f"_{i}")
-                    # 備註區：可記錄用法、文法、發音等
-                    note_val = str(row.get("備註", "") or "").strip()
+                    # 備註區：可記錄用法、文法、發音等（過濾 nan）
+                    note_val = _clean_note(row.get("備註", ""))
                     with st.expander("📝 備註", expanded=bool(note_val)):
                         new_note = st.text_area(
                             "記錄使用方法、例句、文法或發音重點",
