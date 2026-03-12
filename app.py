@@ -352,17 +352,24 @@ def get_audio_bytes(word):
 
 def render_audio_player(word, key_suffix=""):
     """渲染發音播放器（優先有道 URL，iOS Safari 相容性較佳）"""
-    url = get_audio_url(word)
-    if url:
-        st.audio(url, format="audio/mpeg")
-        # iOS 備援：若內嵌無法播放，點連結用系統播放器
-        st.markdown(f'<a href="{url}" target="_blank" rel="noopener" style="font-size:12px">📱 新分頁播放</a>', unsafe_allow_html=True)
-    else:
-        data = get_audio_bytes(word)
-        if data:
-            st.audio(data, format="audio/mpeg")
-        else:
+    try:
+        clean_word = str(word or "").strip()
+        if not clean_word or clean_word.lower() in ("nan", "none"):
             st.caption("無法取得語音")
+            return
+        url = get_audio_url(clean_word)
+        if url:
+            st.audio(url, format="audio/mpeg")
+            # iOS 備援：若內嵌無法播放，點連結用系統播放器
+            st.markdown(f'<a href="{url}" target="_blank" rel="noopener" style="font-size:12px">📱 新分頁播放</a>', unsafe_allow_html=True)
+        else:
+            data = get_audio_bytes(clean_word)
+            if data:
+                st.audio(data, format="audio/mpeg")
+            else:
+                st.caption("無法取得語音")
+    except Exception:
+        st.caption("無法取得語音")
 
 # ==========================================
 # 4. Streamlit 介面設計
@@ -525,7 +532,10 @@ with tab2:
                                     _toggle_unfamiliar_memory(row["單字"], True)
                                     st.rerun()
                     with col_audio:
-                        render_audio_player(row["單字"], key_suffix=f"_{i}")
+                        word_for_audio = str(row.get("單字", "") or "").strip()
+                        safe_key = re.sub(r'[^\w\-]', '_', word_for_audio)[:30] if word_for_audio else str(i)
+                        with st.container(key=f"audio_rv_{i}_{safe_key}"):
+                            render_audio_player(word_for_audio)
                     # 備註區：可記錄用法、文法、發音等（過濾 nan）
                     note_val = _clean_note(row.get("備註", ""))
                     with st.expander("📝 備註", expanded=bool(note_val)):
