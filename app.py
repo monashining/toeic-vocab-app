@@ -536,20 +536,25 @@ with tab2:
                         safe_key = re.sub(r'[^\w\-]', '_', word_for_audio)[:30] if word_for_audio else str(i)
                         with st.container(key=f"audio_rv_{i}_{safe_key}"):
                             render_audio_player(word_for_audio)
-                    # 備註區：可記錄用法、文法、發音等（過濾 nan）
-                    note_val = _clean_note(row.get("備註", ""))
-                    with st.expander("📝 備註", expanded=bool(note_val)):
-                        new_note = st.text_area(
-                            "記錄使用方法、例句、文法或發音重點",
-                            value=note_val,
-                            height=80,
-                            key=f"note_{row['單字']}_{i}",
-                            placeholder="例如：give up 後接 V-ing；發音注意 /ɡɪv/",
-                            label_visibility="collapsed"
-                        )
-                        if st.button("💾 儲存備註", key=f"save_note_{row['單字']}_{i}", use_container_width=True):
-                            _update_note_memory(row["單字"], new_note)
-                            st.rerun()
+                    # 備註區：使用 fragment 僅重繪此區，避免 rerun 影響發音
+                    @st.fragment
+                    def _note_fragment(word: str, idx: int):
+                        df_now = st.session_state.vocab_df
+                        mask = df_now["單字"].astype(str).str.strip() == str(word).strip()
+                        note_val = _clean_note(df_now.loc[mask, "備註"].iloc[0]) if mask.any() else ""
+                        with st.expander("📝 備註", expanded=bool(note_val)):
+                            new_note = st.text_area(
+                                "記錄使用方法、例句、文法或發音重點",
+                                value=note_val,
+                                height=80,
+                                key=f"note_{word}_{idx}",
+                                placeholder="例如：give up 後接 V-ing；發音注意 /ɡɪv/",
+                                label_visibility="collapsed"
+                            )
+                            if st.button("💾 儲存備註", key=f"save_note_{word}_{idx}", use_container_width=True):
+                                _update_note_memory(word, new_note)
+                                # 不呼叫 st.rerun()，讓 fragment 自動重繪即可，避免影響發音
+                    _note_fragment(str(row["單字"]), i)
 
 # --- 分頁 3：記憶卡考試 ---
 with tab3:
